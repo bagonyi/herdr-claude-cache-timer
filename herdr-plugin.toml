@@ -1,0 +1,15 @@
+id = "bagonyi.claude-cache-timer"
+name = "Claude Cache Timer"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Shows when each Claude agent's prompt cache expires ($cache, $cache_until and $cache_span in agent rows)"
+platforms = ["linux", "macos"]
+
+# Every run checks all agents, so each hook runs the same command.
+
+[[startup]]
+command = ["python3", "claude_cache_timer.py"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["python3", "claude_cache_timer.py"]
