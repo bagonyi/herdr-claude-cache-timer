@@ -16,6 +16,12 @@ hour, depending on your setup, and every request that uses the cache starts
 that time again. Until it runs out, carrying on with a conversation is
 cheaper and faster, as Claude reads most of it from the cache.
 
+![Herdrsson's agents panel with a bar under each idle Claude agent: full 3 and 7 minutes after its last request, two segments gone after 24, one orange segment left after 52, and none on the agents whose cache has expired](screenshot.png)
+
+The bars come from this plugin, drawn by [Herdrsson, my fork of Herdr](https://github.com/bagonyi/herdrsson/blob/herdrsson/FORK.md) (see
+[Showing the time](#showing-the-time)). The agents panel's order and times come from
+[Agent Recency](https://github.com/bagonyi/herdr-agent-recency) and the tab markers from [Tab Status](https://github.com/bagonyi/herdr-tab-status).
+
 ## How it works
 
 A conversation's cache expires one cache time after its last request. Claude
@@ -27,7 +33,7 @@ belongs to which agent.
 While an agent works it keeps sending requests, so its time stands still only
 once it stops: it finishes, or asks you something. Herdr runs the plugin when
 an agent's status changes and once at startup. There is no background
-process, and while one run waits for its turn, further events start none. Each
+process, and while one run waits for its turn, further events' runs end at once. Each
 run brings every agent up to date, so a missed event is corrected on the next
 run. It reports an idle or blocked agent's time to Herdr as three pane tokens:
 
