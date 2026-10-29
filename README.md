@@ -33,18 +33,19 @@ belongs to which agent.
 While an agent works it keeps sending requests, so its time stands still only
 once it stops: it finishes, or asks you something. Herdr runs the plugin when
 an agent's status changes and once at startup. There is no background
-process, and while one run waits for its turn, further events' runs end at once. Each
-run brings every agent up to date, so a missed event is corrected on the next
-run. It reports an idle or blocked agent's time to Herdr as three pane tokens:
+process, and while one run waits for its turn, further events' runs end at
+once. Each run brings every agent up to date, so a missed event is corrected
+on the next run. It reports an idle or blocked agent's time to Herdr as three pane tokens:
 
 - `$cache`: `cache 14:52`, the time its cache expires.
 - `$cache_until`: the same time in seconds since the epoch.
 - `$cache_span`: the time of its last request and the time its cache
   expires, in seconds since the epoch, as `FROM/UNTIL`.
 
-They are reported to expire with the cache, so an agent whose cache has
-expired shows none of them. A working agent has none, as its cache keeps
-being refreshed. The plugin keeps nothing of its own: after a server
+`$cache` is reported to expire with the cache. `$cache_until` and
+`$cache_span` stay after that, so the panel can show that the cache has
+expired. A working agent has none of them, as its cache keeps being
+refreshed. The plugin keeps nothing of its own: after a server
 restart, which clears Herdr's tokens, the startup run reads the times again.
 
 ## Showing the time
@@ -66,18 +67,20 @@ putting `$cache_span` in the row with `format = "bar"`:
 [ui.sidebar.agents]
 rows = [["state_icon", "workspace", "tab", { token = "$cache_span", format = "bar", rules = [
   { equals = "▰▱▱▱▱▱", fg = "#ff9e64" },
-  { equals = "▱▱▱▱▱▱", hide = true },
+  { equals = "▱▱▱▱▱▱", fg = "#f7768e", dim = true, strikethrough = true },
 ] }]]
 ```
 
 It starts full, counting from the agent's last request, and loses a segment each time a
 sixth of its cache time is over: every 10 minutes of an hour's cache, every 50 seconds of a
-5-minute one. Rules match the segments shown: here the last one is orange, and an empty
-bar is hidden, which it can only be when the token outlasts the cache (see
-[Limitations](#limitations)).
+5-minute one. Once the cache has expired the bar is empty, `▱▱▱▱▱▱`. Rules match the
+segments shown: here the last one is orange, and an expired cache's bar is dim red and
+crossed out (`strikethrough` needs Herdrsson 2026.10.29.2 or later). To show nothing once
+the cache has expired, give the empty bar `hide = true` instead.
 
-Or count down in minutes (`42m left`, `50s left` in steps of 10 seconds, `0s left` in the
-last 10) with `{ token = "$cache_until", format = "left" }`.
+Or count down in minutes (`42m left`, `50s left` in steps of 10 seconds) with
+`{ token = "$cache_until", format = "left" }`. It shows `0s left` in the last 10 seconds
+and from then on; a rule can give that its own look.
 
 Only Herdrsson 2026.10.29 and later know `format = "left"` and `"bar"`. Stock Herdr and
 older Herdrsson builds reject them, and at startup that makes them ignore the **whole**
@@ -120,10 +123,9 @@ agent status change, for every agent at once.
   for it, so the plugin doesn't run: the agent keeps the previous
   conversation's time (or, after `/resume`, shows none) until it next works.
 - **After the computer sleeps.** Herdr's token lifetimes stop while the
-  computer sleeps, so the tokens can outlast the cache until the next run
-  (any agent's next status change) clears them. Meanwhile a bar shows empty
-  (hide it with a rule, as above), `left` shows `0s left`, and `$cache` shows
-  a time that has passed.
+  computer sleeps, so `$cache` can outlast the cache, showing a time that
+  has passed, until the next run (any agent's next status change) clears
+  it. The bar and `left` go by the clock, so they're right.
 
 ## Uninstall
 
@@ -131,5 +133,5 @@ agent status change, for every agent at once.
 herdr plugin unlink bagonyi.claude-cache-timer
 ```
 
-The tokens already reported stay until they expire, within the hour, or
-until the server restarts, even on agents that start working.
+The tokens already reported stay until the server restarts (`$cache` only
+until its cache expires), even on agents that start working.

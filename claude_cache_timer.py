@@ -20,10 +20,12 @@ agent gets
   which Herdrsson's `format = "bar"` shows as `▰▰▰▰▱▱`, the share of the
   cache time still left.
 
-They are reported to expire with the cache, so an agent whose cache has
-expired shows none of them. Herdr's token lifetimes stop while the computer
-sleeps, though, so after a sleep the tokens can outlast the cache until the
-next run clears them. Agents other than Claude get no tokens.
+`$cache` is reported to expire with the cache. `$cache_until` and
+`$cache_span` stay, so the agents panel can show that the cache has expired:
+the bar is empty then, `▱▱▱▱▱▱`, which a rule can strike through. Herdr's
+token lifetimes stop while the computer sleeps, so after a sleep `$cache`
+can outlast the cache until the next run clears it; the bar goes by the
+clock. Agents other than Claude get no tokens.
 
 Herdr starts no run when Claude switches conversation without a status
 change (`/clear`, `/resume`), so the tokens keep showing the previous
@@ -163,11 +165,8 @@ def wait_until_still(paths):
 
 def cache_window(path):
     """When the conversation's last request was sent and when its cache
-    expires, in seconds, or None if there's no response to go by."""
-    # Every response is written to the file, so one untouched for longer
-    # than the longest cache time has no cache left.
-    if modified(path) + CACHE_1H < time.time():
-        return None
+    expires (or expired), in seconds, or None if there's no response to go
+    by."""
     try:
         sent, cache_time = last_request(path)
     except OSError:
@@ -260,30 +259,42 @@ def parse_time(stamp):
 
 
 def report(agent, window):
-    """Bring the agent's tokens up to date: the time its cache expires, or
-    none if it has no cache left or is working."""
+    """Bring the agent's tokens up to date, reporting only what changed.
+
+    `$cache_until` and `$cache_span` stay once the cache has expired, so the
+    agents panel can show that; `$cache` is reported to expire with the
+    cache. An agent without a conversation (or a working one, whose window
+    is None) has none of them.
+    """
     pane_id, tokens = agent["pane_id"], agent.get("tokens") or {}
+    if window is None:
+        clear_tokens(pane_id, tokens, TOKENS)
+        return
+    # Whole seconds, which is all the tokens hold, so the label never
+    # outlasts the time it shows.
+    until = int(window[1])
+    kept = {TIME_TOKEN: str(until), SPAN_TOKEN: f"{int(window[0])}/{until}"}
+    if any(tokens.get(name) != value for name, value in kept.items()):
+        set_tokens(pane_id, kept)
     now = time.time()
-    # Whole seconds, which is all the tokens hold, so a token never outlasts
-    # the time it shows.
-    until = int(window[1]) if window else None
-    if until is None or until <= now:
-        stale = [name for name in TOKENS if name in tokens]
-        if stale:
-            clear = [arg for name in stale for arg in ("--clear-token", name)]
-            herdr("pane", "report-metadata", pane_id, "--source", SOURCE, *clear)
+    if until <= now:
+        clear_tokens(pane_id, tokens, (LABEL_TOKEN,))
         return
-    values = {
-        LABEL_TOKEN: datetime.fromtimestamp(until).strftime("cache %H:%M"),
-        TIME_TOKEN: str(until),
-        SPAN_TOKEN: f"{int(window[0])}/{until}",
-    }
-    if all(tokens.get(name) == value for name, value in values.items()):
-        return
-    ttl_ms = min(max(1, int((until - now) * 1000)), TTL_MAX_MS)
+    label = datetime.fromtimestamp(until).strftime("cache %H:%M")
+    if tokens.get(LABEL_TOKEN) != label:
+        ttl_ms = min(max(1, int((until - now) * 1000)), TTL_MAX_MS)
+        set_tokens(pane_id, {LABEL_TOKEN: label}, "--ttl-ms", str(ttl_ms))
+
+
+def set_tokens(pane_id, values, *options):
     settings = [arg for name, value in values.items() for arg in ("--token", f"{name}={value}")]
-    herdr("pane", "report-metadata", pane_id, "--source", SOURCE, *settings,
-          "--ttl-ms", str(ttl_ms))
+    herdr("pane", "report-metadata", pane_id, "--source", SOURCE, *settings, *options)
+
+
+def clear_tokens(pane_id, tokens, names):
+    clear = [arg for name in names if name in tokens for arg in ("--clear-token", name)]
+    if clear:
+        herdr("pane", "report-metadata", pane_id, "--source", SOURCE, *clear)
 
 
 def reconcile():
