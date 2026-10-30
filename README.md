@@ -70,36 +70,39 @@ then reload the config (`prefix+shift+r`).
 
 On [Herdrsson](https://github.com/bagonyi/herdrsson/blob/herdrsson/FORK.md) 2026.10.29 or
 later, the time can instead show as a bar of six segments that empties as you watch, by
-putting `$cache_span` in the row with `format = "bar"`:
+putting `$cache_span` in the row with `format = "bar"`. From 2026.10.30, `format = "bar_left"`
+puts the time left after the bar, `▰▰▰▱▱▱ 28m`:
 
 ```toml
 [ui.sidebar.agents]
-rows = [["state_icon", "workspace", "tab", { token = "$cache_span", format = "bar", rules = [
-  { equals = "▰▱▱▱▱▱", fg = "#ff9e64" },
-  { equals = "▱▱▱▱▱▱", fg = "#f7768e", dim = true, strikethrough = true },
+rows = [["state_icon", "workspace", "tab", { token = "$cache_span", format = "bar_left", rules = [
+  { starts_with = "▰▱▱▱▱▱", fg = "#ff9e64" },
+  { equals = "▱▱▱▱▱▱", text = "▱▱▱▱▱▱ expired", fg = "#474e70" },
 ] }]]
 ```
 
 It starts full, counting from the agent's last request, and loses a segment each time a
 sixth of its cache time is over: every 10 minutes of an hour's cache, every 50 seconds of a
-5-minute one. Once the cache has expired the bar is empty, `▱▱▱▱▱▱`. Rules match the
-segments shown: here the last one is orange, and an expired cache's bar is dim red and
-crossed out (`strikethrough` needs Herdrsson 2026.10.29.2 or later). To show nothing once
-the cache has expired, give the empty bar `hide = true` instead.
+5-minute one. The time after it counts down like `left` below (`28m`, `40s`). Once the cache
+has expired the bar is empty, `▱▱▱▱▱▱`, with no time after it. Rules match the text shown:
+here the last 10 minutes are orange, and an expired cache's empty bar says `▱▱▱▱▱▱ expired` in
+grey (a rule's `text` needs 2026.10.30 or later too). To show nothing
+once the cache has expired, give the empty bar `hide = true` instead.
 
 Or count down in minutes (`42m left`, `50s left` in steps of 10 seconds) with
 `{ token = "$cache_until", format = "left" }`. It shows `0s left` in the last 10 seconds
 and from then on; a rule can give that its own look.
 
-To show the size of the conversation's context next to the bar (`70.0k · ▰▰▰▰▱▱`), put
+To show the size of the conversation's context next to the bar (`70.0k · ▰▰▰▰▱▱ 38m`), put
 `"$cache_tokens"` before it in the row. With Agent Recency's time in front as well
-(`12m ago · 122.7k · ▰▰▰▰▱▱`), such a line needs a sidebar about 29 columns wide: at
-Herdr's default width of 26 the end of the bar is cut off.
+(`12m ago · 122.7k · ▰▰▰▰▱▱ 38m`, or `2h ago · 122.7k · ▱▱▱▱▱▱ expired`), such a line needs a
+sidebar about 36 columns wide: in a narrower one its end is cut off.
 
-Only Herdrsson 2026.10.29 and later know `format = "left"` and `"bar"`. Stock Herdr and
-older Herdrsson builds reject them, and at startup that makes them ignore the **whole**
-`config.toml`, not just this row: they start with their defaults (a config reload in a
-running server only keeps its old sidebar settings).
+Only Herdrsson 2026.10.29 and later know `format = "left"` and `"bar"`, and 2026.10.30 and
+later `"bar_left"` and a rule's `text`. Stock Herdr and older Herdrsson builds reject them,
+and at startup that makes them ignore the **whole** `config.toml`, not just this row: they
+start with their defaults (a config reload in a running server only keeps its old sidebar
+settings).
 
 ## Requirements
 
@@ -109,7 +112,8 @@ running server only keeps its old sidebar settings).
 - Claude Code with Herdr's Claude integration, which tells Herdr each agent's
   conversation
 - Only for the bar and the `42m left` countdown: [Herdrsson](https://github.com/bagonyi/herdrsson/blob/herdrsson/FORK.md)
-  2026.10.29 or later, my fork of Herdr (see [Showing the time](#showing-the-time))
+  2026.10.29 or later, my fork of Herdr, and 2026.10.30 for the bar with minutes (see
+  [Showing the time](#showing-the-time))
 
 Tested on macOS with Herdrsson 2026.10.29 (Herdr 0.9.5) and Claude Code 2.1.
 
