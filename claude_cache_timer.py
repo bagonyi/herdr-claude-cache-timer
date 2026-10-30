@@ -470,8 +470,9 @@ def watch():
     the watcher lets go of its lock and looks once more, so an agent that
     starts working meanwhile is followed, by this watcher or by the one the
     run for that agent starts. A watcher also ends when the server has
-    stopped, or after WATCH_FAILURES_MAX passes in a row without an answer;
-    the next run starts another.
+    stopped, after WATCH_FAILURES_MAX passes in a row without an answer, or
+    once the plugin is disabled, as Herdr stops no process a plugin started
+    (see enabled); the next run starts another.
 
     While agents keep working, a watcher can run for hours, and a second one
     ends at once; so when this script changes, the watcher starts again with
@@ -485,6 +486,9 @@ def watch():
         held, failures = True, 0
         while True:
             restart()
+            if not enabled():
+                log("ended: the plugin is disabled")
+                return
             # Not while a run reports, which may be reporting the same
             # agents. Listing them under the lock too means their tokens are
             # as the last run left them.
@@ -520,6 +524,22 @@ def watch():
                 held = False
                 continue
             time.sleep(WATCH_SECONDS)
+
+
+def enabled():
+    """Whether Herdr still has this plugin enabled, as its list of installed
+    plugins says; yes when the list can't be read. `herdr plugin disable`
+    stops the runs but not a watcher, which would otherwise go on while any
+    agent works."""
+    path = os.path.join(os.environ.get("HERDR_CONFIG_DIR") or os.path.expanduser("~/.config/herdr"), "plugins.json")
+    try:
+        with open(path) as f:
+            for plugin in json.load(f):
+                if plugin.get("plugin_id") == PLUGIN_ID:
+                    return plugin.get("enabled", True) is not False
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return True
 
 
 def restarter():
