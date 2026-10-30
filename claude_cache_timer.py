@@ -39,10 +39,10 @@ Herdr starts no run when Claude switches conversation without a status
 change (`/clear`, `/resume`), so the tokens keep showing the previous
 conversation until the agent next works.
 
-Nothing is kept between runs: each one works the times out again from
-Claude's files, so a missed event is corrected by the next run, and a
-server restart, which drops Herdr's tokens, loses nothing once the startup
-run has been. While one run waits for its turn, further events' runs end
+Nothing but where each conversation's file is is kept between runs: each
+one works the times out again from Claude's files, so a missed event is
+corrected by the next run, and a server restart, which drops Herdr's
+tokens, loses nothing once the startup run has been. While one run waits for its turn, further events' runs end
 at once (see turn).
 
 Usage:
@@ -162,14 +162,52 @@ def claude_session(agent):
 def conversation_file(agent):
     """The file of the agent's Claude conversation, or None.
 
-    A new conversation has no file until its first message.
+    A new conversation has no file until its first message. Finding a file
+    lists every project's folder, which takes a while with many projects and
+    agents, so where each one was found is kept (see known_files) and looked
+    for again only once it has gone.
     """
     name = claude_session(agent)
     if name is None:
         return None
+    files = known_files()
+    path = files.get(name)
+    if path and os.path.exists(path):
+        return path
     pattern = os.path.join(glob.escape(CLAUDE_DIR), "projects", "*", glob.escape(name) + ".jsonl")
     paths = glob.glob(pattern)
-    return paths[0] if paths else None
+    if not paths:
+        return None
+    files[name] = paths[0]
+    save_known_files(files)
+    return paths[0]
+
+
+KNOWN_FILES = None
+
+
+def known_files():
+    """Where each conversation's file was found, by session id, as kept in
+    the state directory."""
+    global KNOWN_FILES
+    if KNOWN_FILES is None:
+        try:
+            with open(state_file("files.json")) as f:
+                KNOWN_FILES = dict(json.load(f))
+        except (OSError, ValueError, TypeError):
+            KNOWN_FILES = {}
+    return KNOWN_FILES
+
+
+def save_known_files(files):
+    """Keep the files found, replacing the old list at once so a run or the
+    watcher never reads half of one."""
+    global KNOWN_FILES
+    KNOWN_FILES = files
+    path = state_file("files.json")
+    with open(path + ".new", "w") as f:
+        json.dump(files, f)
+    os.replace(path + ".new", path)
 
 
 def modified(path):
@@ -385,6 +423,12 @@ def clear_tokens(pane_id, tokens, names):
 def reconcile():
     agents = herdr("agent", "list")["agents"]
     files = {agent["pane_id"]: conversation_file(agent) for agent in agents}
+    # Forget the files of conversations no agent has any more, so the list
+    # doesn't grow.
+    live = {claude_session(agent) for agent in agents}
+    kept = known_files()
+    if any(name not in live for name in kept):
+        save_known_files({name: path for name, path in kept.items() if name in live})
     # A working agent's file keeps changing; the watcher follows it.
     wait_until_still(
         [
