@@ -1,8 +1,8 @@
 id = "bagonyi.claude-cache-timer"
 name = "Claude Cache Timer"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.3"
-description = "Shows when each Claude agent's prompt cache expires ($cache, $cache_until and $cache_span in agent rows)"
+description = "Shows when each Claude agent's prompt cache expires and how big its context is ($cache, $cache_until, $cache_span and $cache_tokens in agent rows)"
 platforms = ["linux", "macos"]
 
 # Every run checks all agents, so each hook runs the same command.
