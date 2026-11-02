@@ -16,7 +16,7 @@ hour, depending on your setup, and every request that uses the cache starts
 that time again. Until it runs out, carrying on with a conversation is
 cheaper and faster, as Claude reads most of it from the cache.
 
-![Herdrsson's agents panel with each Claude agent's context size, from green at 37.5k to red at 534.2k, and a bar of its prompt cache's time left, from full with 57m left to one orange segment with 6m left, next to a real Claude whose status line shows the same 48.9k and 57m as its row](screenshot.png)
+![Herdrsson's agents panel with each Claude agent's context size, from green at 37.5k to red at 534.2k, and a bar of its prompt cache's time left, from full with 51m left to one orange segment with 50s left, next to a real Claude whose status line shows the same 48.9k and 52m as its row](screenshot.png)
 
 The context sizes and bars come from this plugin, drawn by [Herdrsson, my fork of Herdr](https://github.com/bagonyi/herdrsson/blob/herdrsson/FORK.md) (see
 [Showing the time](#showing-the-time)). The agents panel's order and times come from
