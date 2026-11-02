@@ -36,8 +36,11 @@ brings every agent up to date, so a missed event is corrected on the next
 run. While an agent works it keeps sending requests, each one starting its
 cache time again, but Herdr starts no run for them: so while any Claude agent
 works, a small watcher process looks at the working agents' files every 2
-seconds, and ends once none works. The plugin reports each Claude agent's
-time to Herdr as pane tokens:
+seconds, and ends once none works. With many agents at work at once, a slower
+watcher costs less: write the seconds you want (`10`, say) to the file
+`watch_seconds` in the plugin's config directory, `$(herdr plugin config-dir
+bagonyi.claude-cache-timer)/watch_seconds`; the next watcher reads it. The
+plugin reports each Claude agent's time to Herdr as pane tokens:
 
 - `$cache`: `cache 14:52`, the time its cache expires.
 - `$cache_until`: the same time in seconds since the epoch.

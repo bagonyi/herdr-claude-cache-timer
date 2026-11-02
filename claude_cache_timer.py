@@ -11,7 +11,8 @@ Herdr runs this script when an agent's status changes, and once at
 startup. Each run looks at every agent. While an agent works it keeps
 sending requests, each one starting its cache time again, but Herdr starts
 no run for them; so while any Claude agent works, a watcher (see watch)
-looks at the working agents' files every WATCH_SECONDS and brings their
+looks at the working agents' files every WATCH_SECONDS (or the number in the
+config directory's `watch_seconds` file) and brings their
 tokens up to date. Each Claude agent gets
 
 - `$cache`: `cache 14:52`, when its cache expires,
@@ -90,8 +91,11 @@ TAIL_MAX = 8 << 20
 TTL_MAX_MS = 86_400_000
 # How long a Herdr CLI call may take before the run gives up on it.
 HERDR_TIMEOUT_SECONDS = 10
-# How often the watcher looks at the working agents' files.
+# How often the watcher looks at the working agents' files, unless the file
+# `watch_seconds` in the plugin's config directory says otherwise (see
+# watch_seconds).
 WATCH_SECONDS = 2.0
+CONFIG_DIR = os.environ.get("HERDR_PLUGIN_CONFIG_DIR")
 # How many passes in a row may fail to list the agents before the watcher
 # ends, while the server's socket is still there.
 WATCH_FAILURES_MAX = 5
@@ -462,9 +466,25 @@ def start_watcher():
         )
 
 
+def watch_seconds():
+    """How often the watcher looks: the number in the file `watch_seconds` in
+    the plugin's config directory (`herdr plugin config-dir <id>`), else
+    WATCH_SECONDS. A fleet with many agents at work may want a slower
+    watcher; 2 s suits a few agents. Anything unreadable, or under 0.5,
+    keeps the default."""
+    if not CONFIG_DIR:
+        return WATCH_SECONDS
+    try:
+        with open(os.path.join(CONFIG_DIR, "watch_seconds")) as f:
+            seconds = float(f.read().strip())
+    except (OSError, ValueError):
+        return WATCH_SECONDS
+    return seconds if seconds >= 0.5 else WATCH_SECONDS
+
+
 def watch():
     """Follow the working agents until none works, bringing their tokens up
-    to date every WATCH_SECONDS.
+    to date every watch_seconds().
 
     One watcher runs per session; a second one ends at once. Before it ends,
     the watcher lets go of its lock and looks once more, so an agent that
@@ -477,6 +497,7 @@ def watch():
     ends at once; so when this script changes, the watcher starts again with
     the new code (see restarter).
     """
+    seconds = watch_seconds()
     with open(state_file("watching.lock"), "w") as lock:
         if not take(lock):
             return
@@ -519,7 +540,7 @@ def watch():
                 fcntl.flock(lock, fcntl.LOCK_UN)
                 held = False
                 continue
-            time.sleep(WATCH_SECONDS)
+            time.sleep(seconds)
 
 
 def restarter():
