@@ -30,27 +30,42 @@ Code's file for the conversation, under `~/.claude/projects/` (or
 wrote, so the plugin reads the time from there. Herdr knows which file
 belongs to which agent.
 
+A keep-alive can keep an idle conversation's cache warm by sending it a
+small request now and then, which doesn't go into the conversation's file.
+If it writes `~/.claude/state/keepalive/<session id>.json` with
+`refreshedAt` (when it last saw the cache refreshed, in milliseconds since
+the epoch) and `armed` (`true` while a ping is coming), the plugin counts
+the cache time from `refreshedAt` when that is later than the last
+request. Without such a file, nothing changes.
+
 Herdr runs the plugin when an agent's status changes and once at startup.
 While one run waits for its turn, further events' runs end at once. Each run
 brings every agent up to date, so a missed event is corrected on the next
 run. While an agent works it keeps sending requests, each one starting its
-cache time again, but Herdr starts no run for them: so while any Claude agent
-works, a small watcher process looks at the working agents' files every 2
-seconds, and ends once none works. The plugin reports each Claude agent's
-time to Herdr as pane tokens:
+cache time again, and a keep-alive pings an idle agent's cache, but Herdr
+starts no run for either: so while any Claude agent works or has a
+keep-alive ping coming, a small watcher process looks every 30 seconds,
+brings the working agents up to date and any agent whose `refreshedAt` has
+changed, and ends once none works or has a ping coming. Between its looks
+Herdrsson counts the time left down by itself, so a new request or ping
+shows up to 30 seconds late, and so does a working agent's context size. The plugin reports
+each Claude agent's time to Herdr as pane tokens:
 
 - `$cache`: `cache 14:52`, the time its cache expires.
 - `$cache_until`: the same time in seconds since the epoch.
-- `$cache_span`: the time of its last request and the time its cache
-  expires, in seconds since the epoch, as `FROM/UNTIL`.
+- `$cache_span`: the time of its last request (or a keep-alive's later
+  ping) and the time its cache expires, in seconds since the epoch, as
+  `FROM/UNTIL`.
 - `$cache_tokens`: `70.0k`, how many tokens its last request's prompt had,
   counting those read from and written to the cache: the number Claude
   Code's status line gets as the context used. Most of it is in the cache,
   and the next request after the cache has expired writes it all again.
   After `/compact`, like the status line, it shows nothing until the next
   response.
+- `$cache_pings`: `↻ 5`, how many pings its keep-alive has left (`pingsLeft`),
+  only while one is coming (`armed`).
 
-`$cache` is reported to expire with the cache. `$cache_until`, `$cache_span`
+`$cache` and `$cache_pings` are reported to expire with the cache. `$cache_until`, `$cache_span`
 and `$cache_tokens` stay after that, so the panel can show that the cache has
 expired. Nothing is kept between runs: after a server restart, which clears
 Herdr's tokens, the startup run reads the times again. The watcher notes when
@@ -98,6 +113,11 @@ To show the size of the conversation's context next to the bar (`70.0k · ▰▰
 (`12m ago · 122.7k · ▰▰▰▰▱▱ 38m`, or `2h ago · 122.7k · ▱▱▱▱▱▱ expired`), such a line needs a
 sidebar about 36 columns wide: in a narrower one its end is cut off.
 
+With a keep-alive (see [How it works](#how-it-works)), put `"$cache_pings"` after the bar to
+show how many pings it has left, `▰▰▰▰▱▱ 38m · ↻ 5`, as Claude Code's status line does.
+It shows only while a ping is coming, so it takes no room otherwise. `↻` is one cell wide
+in fonts that have it or fall back to one that does, such as Menlo.
+
 Only Herdrsson 2026.10.29 and later know `format = "left"` and `"bar"`, and 2026.10.30 and
 later `"bar_left"` and a rule's `text`. Stock Herdr and older Herdrsson builds reject them,
 and at startup that makes them ignore the **whole** `config.toml`, not just this row: they
@@ -132,7 +152,8 @@ agent status change, for every agent at once.
 - **An estimate.** The plugin goes by when Claude logged each response, which
   is a little after the request was sent, and assumes 5 minutes when it
   finds no cache write near the end of the file. Requests Claude Code makes
-  that don't go into the conversation's file aren't seen. While an agent
+  that don't go into the conversation's file aren't seen, except a
+  keep-alive's pings that it records as above. While an agent
   works, the tokens go by its last response, so a request still on its way
   isn't counted yet (Claude Code's status line goes by the same).
 - **Switching conversation inside Claude.** `/clear` and `/resume` change the
@@ -152,5 +173,5 @@ herdr plugin unlink bagonyi.claude-cache-timer
 
 The tokens already reported stay until the server restarts (`$cache` only
 until its cache expires). The same goes for `herdr plugin disable`. After
-either, a watcher still running brings the working agents' tokens up to date
-until none works.
+either, a watcher still running brings the agents' tokens up to date until
+none works or has a keep-alive ping coming.

@@ -7,12 +7,19 @@ conversation's cache expires one such time after its last request; until
 then, carrying on with it is cheaper and faster. Claude's own file for the
 conversation records each response's time and which cache time it wrote.
 
+A keep-alive can keep an idle conversation's cache warm with requests
+that don't go into that file. If it says when it last refreshed the cache
+in a file of its own (see KEEPALIVE_DIR), the cache expires one cache time
+after the later of the two. Without such a file, nothing changes.
+
 Herdr runs this script when an agent's status changes, and once at
 startup. Each run looks at every agent. While an agent works it keeps
-sending requests, each one starting its cache time again, but Herdr starts
-no run for them; so while any Claude agent works, a watcher (see watch)
-looks at the working agents' files every WATCH_SECONDS and brings their
-tokens up to date. Each Claude agent gets
+sending requests, each one starting its cache time again, and a keep-alive
+pings an idle agent's cache, but Herdr starts no run for either; so while
+any Claude agent works or has a ping coming, a watcher (see watch) looks
+every WATCH_SECONDS and brings the working agents' tokens up to date, and
+those of an agent whose keep-alive has refreshed its cache. Each Claude
+agent gets
 
 - `$cache`: `cache 14:52`, when its cache expires,
 - `$cache_until`: the same time in seconds since the epoch, which
@@ -26,8 +33,10 @@ tokens up to date. Each Claude agent gets
   and the next request after the cache has expired writes it all again.
   After the conversation has been compacted, the status line shows no
   number until the next response, and neither does `$cache_tokens`.
+- `$cache_pings`: `↻ 5`, how many pings its keep-alive has left, while one
+  is coming, as Claude Code's status line shows them.
 
-`$cache` is reported to expire with the cache. `$cache_until`, `$cache_span`
+`$cache` and `$cache_pings` are reported to expire with the cache. `$cache_until`, `$cache_span`
 and `$cache_tokens` stay, so the agents panel can show that the cache has
 expired:
 the bar is empty then, `▱▱▱▱▱▱`, which a rule can strike through. Herdr's
@@ -66,7 +75,12 @@ LABEL_TOKEN = "cache"
 TIME_TOKEN = "cache_until"
 SPAN_TOKEN = "cache_span"
 SIZE_TOKEN = "cache_tokens"
-TOKENS = (LABEL_TOKEN, TIME_TOKEN, SPAN_TOKEN, SIZE_TOKEN)
+PINGS_TOKEN = "cache_pings"
+TOKENS = (LABEL_TOKEN, TIME_TOKEN, SPAN_TOKEN, SIZE_TOKEN, PINGS_TOKEN)
+# Before the pings left, as Claude Code's status line has it. Not ⟳: fonts
+# without either (JetBrains Mono) fall back to one that draws ↻ one cell
+# wide (Menlo), but ⟳ wider than its cell.
+PINGS_MARK = "↻"
 SCRIPT = os.path.abspath(__file__)
 # Herdr sets it for its runs; a run by hand uses the current folder, and
 # starts no watcher (see start_watcher).
@@ -75,6 +89,13 @@ STATE_DIR = HERDR_STATE_DIR or "."
 SESSION = os.environ.get("HERDR_SOCKET_PATH", "")
 # Claude Code keeps each conversation in projects/<folder>/<session id>.jsonl.
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+# A keep-alive writes each conversation's state here as <session id>.json:
+# when it last saw the cache refreshed (`refreshedAt`, in milliseconds since
+# the epoch: the conversation's last request, or a ping since, which the
+# conversation's file doesn't record) and whether a ping is coming
+# (`armed`). Always under the home folder's .claude, not
+# CLAUDE_CONFIG_DIR, so a status line and this plugin find it alike.
+KEEPALIVE_DIR = os.path.expanduser("~/.claude/state/keepalive")
 
 CACHE_5M = 300
 CACHE_1H = 3600
@@ -90,8 +111,11 @@ TAIL_MAX = 8 << 20
 TTL_MAX_MS = 86_400_000
 # How long a Herdr CLI call may take before the run gives up on it.
 HERDR_TIMEOUT_SECONDS = 10
-# How often the watcher looks at the working agents' files.
-WATCH_SECONDS = 2.0
+# How often the watcher looks at the agents' files. Herdrsson counts the
+# time left down by itself, so a pass is needed only to see a new request or
+# ping, and seeing one up to this late changes the bar by less than a
+# segment.
+WATCH_SECONDS = 30.0
 # How many passes in a row may fail to list the agents before the watcher
 # ends, while the server's socket is still there.
 WATCH_FAILURES_MAX = 5
@@ -172,6 +196,44 @@ def conversation_file(agent):
     return paths[0] if paths else None
 
 
+def keepalive(agent):
+    """The keep-alive's state for the agent's conversation, or {} when there
+    is none."""
+    name = claude_session(agent)
+    if name is None:
+        return {}
+    try:
+        with open(os.path.join(KEEPALIVE_DIR, name + ".json")) as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def refreshed_at(state):
+    """When the keep-alive last saw the cache refreshed, in seconds since the
+    epoch, or None."""
+    at = state.get("refreshedAt")
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        return None
+    return at / 1000
+
+
+def pings_left(state):
+    """How many pings the keep-alive has left while one is coming (its
+    `armed` and `pingsLeft`), or None."""
+    left = state.get("pingsLeft")
+    if state.get("armed") is not True or isinstance(left, bool) or not isinstance(left, int):
+        return None
+    return left if left > 0 else None
+
+
+def keepalive_view(state):
+    """What the agent's tokens show of the keep-alive's state: the watcher
+    reports an idle agent again when this changes."""
+    return refreshed_at(state), pings_left(state)
+
+
 def modified(path):
     try:
         return os.path.getmtime(path)
@@ -199,19 +261,27 @@ def wait_until_still(paths):
         time.sleep(wait)
 
 
-def cache_window(path):
-    """When the conversation's last request was sent and when its cache
-    expires (or expired), in seconds, and how many tokens that request's
-    prompt had (None if not recorded), or None if there's no response to go
-    by."""
+def cache_window(path, state=None):
+    """When the conversation's cache was last refreshed and when it expires
+    (or expired), in seconds, how many tokens its last request's prompt had
+    (None if not recorded) and how many pings its keep-alive has left (None
+    unless one is coming), or None if there's no response to go by.
+
+    `state` is the keep-alive's state, if there is one. The cache was last
+    refreshed by the conversation's last request, or, if later, when the
+    keep-alive last saw it refreshed."""
+    state = state or {}
     try:
         sent, cache_time, prompt = last_request(path)
     except OSError:
         return None
     if sent is None:
         return None
+    refreshed = refreshed_at(state)
+    if refreshed is not None:
+        sent = max(sent, refreshed)
     # No cache write in view: assume the shorter time rather than overstate it.
-    return sent, sent + (cache_time or CACHE_5M), prompt
+    return sent, sent + (cache_time or CACHE_5M), prompt, pings_left(state)
 
 
 def last_request(path):
@@ -341,15 +411,15 @@ def report(agent, window):
     """Bring the agent's tokens up to date, reporting only what changed.
 
     `$cache_until`, `$cache_span` and `$cache_tokens` stay once the cache
-    has expired, so the agents panel can show that; `$cache` is reported to
-    expire with the cache. An agent without a conversation (whose window is
-    None) has none of them.
+    has expired, so the agents panel can show that; `$cache` and
+    `$cache_pings` are reported to expire with the cache. An agent without a
+    conversation (whose window is None) has none of them.
     """
     pane_id, tokens = agent["pane_id"], agent.get("tokens") or {}
     if window is None:
         clear_tokens(pane_id, tokens, TOKENS)
         return
-    sent, until, prompt = window
+    sent, until, prompt, pings = window
     # Whole seconds, which is all the tokens hold, so the label never
     # outlasts the time it shows.
     until = int(until)
@@ -362,13 +432,19 @@ def report(agent, window):
         clear_tokens(pane_id, tokens, (SIZE_TOKEN,))
     now = time.time()
     if until <= now:
-        clear_tokens(pane_id, tokens, (LABEL_TOKEN,))
+        clear_tokens(pane_id, tokens, (LABEL_TOKEN, PINGS_TOKEN))
         return
-    label = datetime.fromtimestamp(until).strftime("cache %H:%M")
+    lasting = {LABEL_TOKEN: datetime.fromtimestamp(until).strftime("cache %H:%M")}
+    if pings is None:
+        clear_tokens(pane_id, tokens, (PINGS_TOKEN,))
+    else:
+        lasting[PINGS_TOKEN] = f"{PINGS_MARK} {pings}"
     # A new expiry in the same minute keeps the label but moves its end.
-    if tokens.get(LABEL_TOKEN) != label or tokens.get(TIME_TOKEN) != str(until):
+    if any(tokens.get(name) != value for name, value in lasting.items()) or tokens.get(
+        TIME_TOKEN
+    ) != str(until):
         ttl_ms = min(max(1, int((until - now) * 1000)), TTL_MAX_MS)
-        set_tokens(pane_id, {LABEL_TOKEN: label}, "--ttl-ms", str(ttl_ms))
+        set_tokens(pane_id, lasting, "--ttl-ms", str(ttl_ms))
 
 
 def set_tokens(pane_id, values, *options):
@@ -406,7 +482,8 @@ def report_all(agents, files):
     for agent in agents:
         path = files.get(agent["pane_id"])
         try:
-            report(agent, cache_window(path) if path else None)
+            window = cache_window(path, keepalive(agent)) if path else None
+            report(agent, window)
         except subprocess.CalledProcessError as error:
             # The pane may have closed since the list; the others still count.
             print(f"{agent['pane_id']}: {error.stderr.strip() or error}", file=sys.stderr)
@@ -419,9 +496,15 @@ def report_all(agents, files):
     return failed
 
 
-def watched(agent):
-    """Whether the watcher follows the agent: a working Claude agent."""
-    return agent["agent_status"] == "working" and claude_session(agent) is not None
+def watched(agent, state=None):
+    """Whether the watcher follows the agent: a Claude agent that works, or
+    whose keep-alive has a ping coming. `state` is the keep-alive's state,
+    if already read."""
+    if claude_session(agent) is None:
+        return False
+    if agent["agent_status"] == "working":
+        return True
+    return (keepalive(agent) if state is None else state).get("armed") is True
 
 
 def take(lock):
@@ -463,8 +546,11 @@ def start_watcher():
 
 
 def watch():
-    """Follow the working agents until none works, bringing their tokens up
-    to date every WATCH_SECONDS.
+    """Follow the agents that work or have a keep-alive ping coming until
+    none does, every WATCH_SECONDS bringing up to date the tokens of the
+    working agents and of any agent whose keep-alive has refreshed its cache
+    or changed its pings since (an idle agent's tokens change only then). The first pass brings
+    every Claude agent up to date.
 
     One watcher runs per session; a second one ends at once. Before it ends,
     the watcher lets go of its lock and looks once more, so an agent that
@@ -473,9 +559,9 @@ def watch():
     stopped, or after WATCH_FAILURES_MAX passes in a row without an answer;
     the next run starts another.
 
-    While agents keep working, a watcher can run for hours, and a second one
-    ends at once; so when this script changes, the watcher starts again with
-    the new code (see restarter).
+    While agents keep working or have pings coming, a watcher can run for
+    hours, and a second one ends at once; so when this script changes, the
+    watcher starts again with the new code (see restarter).
     """
     with open(state_file("watching.lock"), "w") as lock:
         if not take(lock):
@@ -483,6 +569,9 @@ def watch():
         log("started")
         restart = restarter()
         held, failures = True, 0
+        # The keep-alive state each agent's tokens were last brought up to
+        # date with (see keepalive_view), by pane.
+        reported = {}
         while True:
             restart()
             # Not while a run reports, which may be reporting the same
@@ -491,7 +580,12 @@ def watch():
             with open(state_file("running.lock"), "w") as running:
                 fcntl.flock(running, fcntl.LOCK_EX)
                 try:
-                    agents = [agent for agent in herdr("agent", "list")["agents"] if watched(agent)]
+                    claude = [
+                        (agent, keepalive(agent))
+                        for agent in herdr("agent", "list")["agents"]
+                        if claude_session(agent) is not None
+                    ]
+                    agents = [agent for agent, state in claude if watched(agent, state)]
                     failures = 0
                 except (subprocess.SubprocessError, OSError, ValueError, LookupError, TypeError) as error:
                     agents = None
@@ -502,8 +596,10 @@ def watch():
                         log("ended: another watcher has taken over")
                         return
                     held = True
-                if agents:
-                    report_all(agents, {agent["pane_id"]: conversation_file(agent) for agent in agents})
+                if agents is not None:
+                    # Even once the watcher follows none of them: a keep-alive's
+                    # last ping also ends its pings.
+                    report_changed(claude, reported)
             if agents is None:
                 if not os.path.exists(SESSION):
                     log("ended: the server has stopped")
@@ -513,13 +609,30 @@ def watch():
                     return
             elif not agents:
                 if not held:
-                    log("ended: no agent is working")
+                    log("ended: no agent works or has a keep-alive ping coming")
                     return
                 # Look once more without the lock, at once.
                 fcntl.flock(lock, fcntl.LOCK_UN)
                 held = False
                 continue
             time.sleep(WATCH_SECONDS)
+
+
+def report_changed(claude, reported):
+    """Bring up to date the tokens of the working agents and of those whose
+    keep-alive state shows differently from `reported` (see keepalive_view),
+    given as (agent, keep-alive state) pairs, and note what was reported,
+    unless a report failed."""
+    views = {agent["pane_id"]: keepalive_view(state) for agent, state in claude}
+    due = [
+        agent
+        for agent, _ in claude
+        if agent["agent_status"] == "working"
+        or agent["pane_id"] not in reported
+        or reported[agent["pane_id"]] != views[agent["pane_id"]]
+    ]
+    if due and not report_all(due, {agent["pane_id"]: conversation_file(agent) for agent in due}):
+        reported.update((agent["pane_id"], views[agent["pane_id"]]) for agent in due)
 
 
 def restarter():
