@@ -108,6 +108,17 @@ Or count down in minutes (`42m left`, `50s left` in steps of 10 seconds) with
 `{ token = "$cache_until", format = "left" }`. It shows `0s left` in the last 10 seconds
 and from then on; a rule can give that its own look.
 
+From Herdrsson 2026.11.06, `format = "time_left"` shows the same countdown without the word,
+`42m`, `50s` and `0s` at the end, as in the screenshot, and rules with `lt` or `gt` read the
+time as seconds, so `lt = 600` matches the last 10 minutes:
+
+```toml
+{ token = "$cache_until", format = "time_left", rules = [
+  { equals = "0s", text = "expired", fg = "#474e70" },
+  { lt = 600, fg = "#ff9e64" },
+] }
+```
+
 To show the size of the conversation's context next to the bar (`70.0k · ▰▰▰▰▱▱ 38m`), put
 `"$cache_tokens"` before it in the row. With Agent Recency's time in front as well
 (`12m ago · 122.7k · ▰▰▰▰▱▱ 38m`, or `2h ago · 122.7k · ▱▱▱▱▱▱ expired`), such a line needs a
@@ -118,8 +129,8 @@ show how many pings it has left, `▰▰▰▰▱▱ 38m · ↻ 5`, as Claude Co
 It shows only while a ping is coming, so it takes no room otherwise. `↻` is one cell wide
 in fonts that have it or fall back to one that does, such as Menlo.
 
-Only Herdrsson 2026.10.29 and later know `format = "left"` and `"bar"`, and 2026.10.30 and
-later `"bar_left"` and a rule's `text`. Stock Herdr and older Herdrsson builds reject them,
+Only Herdrsson 2026.10.29 and later know `format = "left"` and `"bar"`, 2026.10.30 and
+later `"bar_left"` and a rule's `text`, and 2026.11.06 and later `"time_left"`. Stock Herdr and older Herdrsson builds reject them,
 and at startup that makes them ignore the **whole** `config.toml`, not just this row: they
 start with their defaults (a config reload in a running server only keeps its old sidebar
 settings).
@@ -132,8 +143,8 @@ settings).
 - Claude Code with Herdr's Claude integration, which tells Herdr each agent's
   conversation
 - Only for the bar and the `42m left` countdown: [Herdrsson](https://github.com/bagonyi/herdrsson/blob/herdrsson/FORK.md)
-  2026.10.29 or later, my fork of Herdr, and 2026.10.30 for the bar with minutes (see
-  [Showing the time](#showing-the-time))
+  2026.10.29 or later, my fork of Herdr, 2026.10.30 for the bar with minutes and 2026.11.06
+  for `42m` on its own (see [Showing the time](#showing-the-time))
 
 Tested on macOS with Herdrsson 2026.10.29 (Herdr 0.9.5) and Claude Code 2.1.
 
